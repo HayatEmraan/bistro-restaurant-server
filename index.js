@@ -5,6 +5,7 @@ const port = process.env.PORT || 3000;
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 const jwt = require("jsonwebtoken");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 app.use(cors());
 app.use(express.json());
 
@@ -18,7 +19,6 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   },
 });
-
 // verifyJWT
 const verifyJWT = (req, res, next) => {
   const query = req.headers.authorization;
@@ -54,6 +54,7 @@ async function run() {
     const bistroReviews = client.db("bistroDB").collection("bistroReviews");
     const bistroOrders = client.db("bistroDB").collection("bistroOrders");
     const bistroUsers = client.db("bistroDB").collection("bistroUsers");
+    const bistroPayment = client.db("bistroDB").collection("bistroPayment");
 
     // find all documents in the collection
     app.get("/menu", async (req, res) => {
@@ -66,6 +67,11 @@ async function run() {
         : await bistroMenu.find({});
       const results = await cursor.toArray();
       res.send(results);
+    });
+    app.delete("/menu/:id", verifyJWT, verifyAdmin, async (req, res) => {
+      const query = req.params.id;
+      const result = await bistroMenu.deleteOne({ _id: new ObjectId(query) });
+      res.send(result);
     });
 
     app.get("/reviews", async (req, res) => {
@@ -86,7 +92,6 @@ async function run() {
     // admin cookies add
     app.post("/api/admin/cookies", async (req, res) => {
       const query = req.body;
-      console.log(query);
       const token = jwt.sign(query, process.env.ACCESS_TOKEN, {
         expiresIn: "24h",
       });
@@ -144,13 +149,40 @@ async function run() {
       res.send(result);
     });
 
+    app.post(
+      "/api/admin/items/post",
+      verifyJWT,
+      verifyAdmin,
+      async (req, res) => {
+        const result = await bistroMenu.insertOne(req.body);
+        res.send(result);
+      }
+    );
 
-
+    app.post("/payment", verifyJWT, async (req, res) => {
+      const { price } = req.body;
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: price * 100,
+        currency: "usd",
+        payment_method_types: ["card"],
+      });
+      res.send({ clientSecret: paymentIntent.client_secret });
+    });
 
     app.delete("/api/admin/users/delete/:id", async (req, res) => {
       const query = req.params.id;
       const result = await bistroUsers.deleteOne({ _id: new ObjectId(query) });
       res.send(result);
+    });
+
+    app.post("/payments", async (req, res) => {
+      const payment = req.body;
+      const filter = {
+        _id: { $in: payment.items.map((item) => new ObjectId(item)) },
+      };
+      const cursor = await bistroOrders.deleteMany(filter);
+      const result = await bistroPayment.insertOne(payment);
+      res.send({result, cursor});
     });
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
